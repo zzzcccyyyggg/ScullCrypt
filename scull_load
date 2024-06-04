@@ -20,11 +20,9 @@ fi
 # 这行代码通过读取 /proc/devices 文件并使用 awk 命令,获取与 scull 模块相关联的主设备号
 major=$(awk "\$2==\"$module\" {print \$1}" /proc/devices)
 
-# Remove stale nodes and replace them, then give gid and perms
-# Usually the script is shorter, it's scull that has several devices in it.
 # 这行输出设备名称、主设备号和第一个次设备号 (0) 的信息。
 echo ${device}0 $major  0
-# 这行删除已存在的 /dev/scull[0-3] 设备节点
+# 删除已存在的 /dev/scull[0-3] 设备节点
 rm -f /dev/${device}[0-3]
 # 使用 mknod 命令创建 4 个字符设备节点 /dev/scull[0-3],主设备号为之前获取的值,次设备号从 0 到 3。
 mknod /dev/${device}0 c $major 0

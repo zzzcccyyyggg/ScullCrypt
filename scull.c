@@ -55,6 +55,7 @@ struct file_operations scull_fops = {
 char lkey[16];
 char rkey[16];
 char key[32];
+int if_rightkey_init = 0;
 char Sbox[8][16] = {
     {
         0x03, 0x08, 0x0F, 0x01, 0x0A, 0x06, 0x05, 0x0B,
@@ -279,6 +280,40 @@ struct scull_qset *scull_follow(struct scull_dev *dev, int n)
     }
     return qs; // 返回第 n 个量子集指针
 }
+void myswap(unsigned char *a, unsigned char *b) {
+    unsigned char temp = *a;
+    *a = *b;
+    *b = temp;
+}
+void read_decrypt(char *data){
+    unsigned char T[ARRAY_LENGTH];
+    unsigned char S[ARRAY_LENGTH];
+    int key_lenth = 32;
+    for (int i = 0; i < ARRAY_LENGTH; i++) {
+        S[i] = i;
+        T[i] = key[i % key_lenth];
+    }
+
+    int j = 0;
+    for (int i = 0; i < ARRAY_LENGTH; i++) {
+        j = (j + S[i] + T[i]) % ARRAY_LENGTH;
+        myswap(&S[i], &S[j]);
+    }
+    //这里为改进部分
+    for (int i = 0;i < ARRAY_LENGTH;i++){
+        S[i] = (Sbox[i%8][(S[i]>>4)]^Sbox[i%8][(S[i]&(0xf))]);
+    }
+    //以上为改进的rc4 ksa
+    int i = 0; 
+    j = 0;
+    for (int n = 0; n < strlen(data); n++) {
+        i = (i + 1) % ARRAY_LENGTH;
+        j = (j + S[i]) % ARRAY_LENGTH;
+        myswap(&S[i], &S[j]);
+        int rand = S[(S[i] + S[j]) % ARRAY_LENGTH];
+        data[n] = data[n] ^ rand;
+    }
+}
 //这里并未实现解密逻辑 且只能读取前4000个字节数据
 ssize_t scull_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos) {
     struct scull_dev *dev = filp->private_data; /* 获取设备结构体指针 */
@@ -287,7 +322,10 @@ ssize_t scull_read(struct file *filp, char __user *buf, size_t count, loff_t *f_
     int itemsize = quantum * qset; /* 计算每个量子集的总大小 */
     int item, s_pos, q_pos, rest;
     ssize_t retval = 0;
-
+    if(!if_rightkey_init){
+        scull_openkey_init(filp);
+        if_rightkey_init = 1;
+    }
     if (down_interruptible(&dev->sem)) /* 获取信号量锁 */
         return -ERESTARTSYS;
 
@@ -317,8 +355,10 @@ ssize_t scull_read(struct file *filp, char __user *buf, size_t count, loff_t *f_
             temp_count = count;
             count = 0;
         }
-
-        if (copy_to_user(buf, dptr->data[s_pos] + q_pos, temp_count)) {
+        char *kbuf = kmalloc(temp_count,GFP_KERNEL);
+        memcpy(kbuf,dptr->data[s_pos] + q_pos,temp_count);
+        read_decrypt(kbuf);
+        if (copy_to_user(buf, kbuf, temp_count)) {
             retval = -EFAULT;
             goto out;
         }
@@ -331,17 +371,12 @@ ssize_t scull_read(struct file *filp, char __user *buf, size_t count, loff_t *f_
 
 out:
     up(&dev->sem); /* 释放信号量锁 */
-    //将文件位置还原至文件开头
 
     //printk(KERN_INFO "scull_read: 完成读取, 总共读取 %zd 字节\n", retval);
     return retval;
 }
 
-void myswap(unsigned char *a, unsigned char *b) {
-    unsigned char temp = *a;
-    *a = *b;
-    *b = temp;
-}
+
 
 void write_encrypt(char *data){
     unsigned char T[ARRAY_LENGTH];
@@ -395,7 +430,10 @@ ssize_t scull_write(struct file *filp, const char __user *buf, size_t count, lof
     if (down_interruptible(&dev->sem)) // 获取信号量锁
         return -ERESTARTSYS;
     //一点改动 可以写多个量子集
-    scull_openkey_init(filp);
+    if(!if_rightkey_init){
+        scull_openkey_init(filp);
+        if_rightkey_init = 1;
+    }
     memcpy(key,lkey,16);
     memcpy(&(key[16]),rkey,16);
     char *kbuf = kmalloc(count,GFP_KERNEL);
